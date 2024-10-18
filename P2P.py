@@ -3,8 +3,8 @@ import psutil
 import threading
 import select
 import sys
-from random import randint
-import time
+import protocol
+
 # Receive on port 50000
 # Send from port 50001
 
@@ -34,23 +34,23 @@ def sending_messages(sock, ip_opp_peer, port_opp_peer_receive, event):
         if message == "exit":
             print("\nClosing connection...", flush=True)
             print("Opposite peer will sleep automatically", flush=True)
-            sock.sendto(b"EXIT", (ip_opp_peer, port_opp_peer_receive))
+            protocol.sending_packet("EXIT", b"", sock, ip_opp_peer, port_opp_peer_receive)
             break
-        sock.sendto(message.encode(), (ip_opp_peer, port_opp_peer_receive))
+        protocol.sending_packet("TXT", message.encode(), sock, ip_opp_peer, port_opp_peer_receive)
 
 
 def receiving_messages(sock, ip_opp_peer, port_opp_peer_receive, shared_var, exit_ev):
    while shared_var[0]:
-       answ = sock.recvfrom(1024)
-       if answ[0] == b"EXIT":
+       flags, _, _, _, _, _, message = protocol.receiving_messages(sock)
+       if "EXIT" in flags:
            print("\nClosing connection due to initiation from opponent peer", flush=True)
            exit_ev.set()
            shared_var[0] = False
            break
-       if answ[0] == b"EXITR":
+       if "EXITACK" in flags or "ACKEXIT" in flags:
            shared_var[0] = False
            break
-       print(f"Message recieved: {answ[0].decode()}")
+       print(f"Message recieved: {message}")
 
 
 
@@ -62,26 +62,26 @@ def start_conversation(sock, ip_opp_peer, port_opp_peer_receive):
     listen_thread1.start()
     sending_messages(sock, ip_opp_peer, port_opp_peer_receive, exit_ev)
     if exit_ev.is_set():
-        sock.sendto(b"EXITR", (ip_opp_peer, port_opp_peer_receive))
+        protocol.sending_packet("EXITACK", b"", sock, ip_opp_peer, port_opp_peer_receive)  # ack
     listen_thread1.join()
     sock.close()
     print("Exiting...", flush=True)
 
 
 def main_node_for_handshake(sock, ip_opp_peer, port_opp_peer_receive):
-    sock.sendto(b"SYN", (ip_opp_peer, port_opp_peer_receive))
+    protocol.sending_packet("SYN", b"", sock, ip_opp_peer, port_opp_peer_receive)
     sock.settimeout(60)
     while True:
         try:
-            data, addr = sock.recvfrom(1024)
-            if data == b"SYN":
-                    sock.sendto(b"ACK", (ip_opp_peer, port_opp_peer_receive))
-                    data, addr = sock.recvfrom(1024)
-                    if data == b"CONN":
+            flags, *_ = protocol.receiving_messages(sock)
+            if "SYN" in flags and "ACK" not in flags:
+                    protocol.sending_packet("SYNACK", b"", sock, ip_opp_peer, port_opp_peer_receive)#ack
+                    flags, *_ = protocol.receiving_messages(sock)
+                    if "ACK" in flags:
                         print("Connection successful!")
                         return
-            if data == b"ACK":
-                sock.sendto(b"CONN", (ip_opp_peer, port_opp_peer_receive))
+            if "SYNACK" in flags or "ACKSYN" in flags:
+                protocol.sending_packet("ACK", b"", sock, ip_opp_peer, port_opp_peer_receive) #ack
                 print("Connection succesful!")
                 return
         except socket.timeout:
