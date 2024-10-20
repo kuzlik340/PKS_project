@@ -1,71 +1,56 @@
-import socket
 import struct
 
-message_id = 0 #overload after 2 000 000 000 messages
 
 def sending_packet(flags, message, sock, ip_opp_peer, port_opp_peer_receive):
-    global message_id
-    message_id += 1
     flags_to_send = 0b00000000
-    #creating flags
-    if "SYN" in flags:
+    # encoding the flags into bits
+    if "SYN" in flags: #synchronisation
         flags_to_send |= 0b00000001
-    if "ACK" in flags:
+    if "ACK" in flags: #confirmation
         flags_to_send |= 0b00000010
-    if "ERR" in flags:
+    if "ERR" in flags: #damaged packet
         flags_to_send |= 0b00000100
-    if "FIN" in flags: #final file
+    if "FIN" in flags: #final file in sequence
         flags_to_send |= 0b00001000
     if "EXIT" in flags: #exit connection
         flags_to_send |= 0b00010000
-    if "DATA" in flags:
+    if "DATA" in flags: #segmented data
         flags_to_send |= 0b00100000
-    if "TXT" in flags:
+    if "TXT" in flags: #txt message
        flags_to_send |= 0b01000000
-    if "KEA" in flags:
+    if "KEA" in flags: #keep-alive packet
         flags_to_send |= 0b10000000
-    message_id = message_id & 0xFFFFFF
-    fragment_offset = 0
-    total_length = 0
-    seg_num = 0
+    sequence_num = 0
+    acknowledgement_num = 0
     checksum = 0
     length = len(message)
-
-    packet = \
-    (struct.pack(
-        '!B', flags_to_send  # 1 байт: Флаги
-    ) + message_id.to_bytes(3, 'big') +
-    struct.pack(
-        '!HHBHH',  # Упаковываем остальные поля:
-        fragment_offset,  # 2 байта: Fragment Offset
-        total_length,  # 2 байта: Total Length
-        seg_num,  # 1 байт: Segment Number
-        checksum,  # 2 байта: Checksum (нулевой, если не реализована проверка)
-        length  # 2 байта: Length сообщения
-    ))
+    window = 0
+    packet = (struct.pack(
+        '!II', sequence_num, acknowledgement_num
+    )) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
 
     packet += message
     sock.sendto(packet, (ip_opp_peer, port_opp_peer_receive))
 
 
 def receiving_messages(sock):
-    # Предположим, что размер заголовка фиксирован (1 байт флагов + 3 байта message_id + остальные поля)
-    header_size = 13
+    header_size = 14
+    packet, (ip_opp_peer_fr, port) = sock.recvfrom(1450)
 
-    # Ожидаем получения пакета
-    packet, addr = sock.recvfrom(1024)  # Получаем пакет, допустим, до 1024 байт
-
-    # Извлекаем заголовок
     header = packet[:header_size]
 
-    # Распаковываем заголовок
-    flags_to_receive = struct.unpack('!B', header[:1])[0]  # 1 байт: Flags
-    message_id = int.from_bytes(header[1:4], 'big')  # 3 байта: Message ID (24 бита)
-    fragment_offset, total_length, seg_num, checksum, length = struct.unpack('!HHBHH', header[4:13])
+    # unpacking header
+    sequence_num = int.from_bytes(header[0:4], 'big')  # 3 байта: Message ID (24 бита)
+    acknowledgement_num = int.from_bytes(header[4:8], 'big')
+    flags_to_receive = struct.unpack('!B', header[8:9])[0]
+    length = int.from_bytes(header[9:11], 'big')
+    checksum = int.from_bytes(header[11:13], 'big')
+    window = header[13]
 
 
-    # Извлекаем сообщение (payload)
+    # decode payload
     message = packet[header_size:].decode()  # Полезная нагрузка - после заголовка
+    # decode flags
     flags = ""
     if flags_to_receive & 0b00000001:
         flags += "SYN"
@@ -85,7 +70,7 @@ def receiving_messages(sock):
         flags += "KEA"
 
 
-    return flags, message_id, fragment_offset, total_length, seg_num, checksum, message
+    return flags, sequence_num, length, acknowledgement_num, checksum, window, ip_opp_peer_fr, message
 
 
 
