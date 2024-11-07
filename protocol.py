@@ -1,7 +1,26 @@
 import struct
 
+def fletcher(data: bytes) -> int:
+    sum1 = 0
+    sum2 = 0
+    for byte in data:
+        sum1 = (sum1 + byte) % 255
+        sum2 = (sum2 + sum1) % 255
+    return (sum2 << 8) | sum1
 
-def sending_packet(flags, message, sock, ip_opp_peer, port_opp_peer_receive):
+def create_checksum(payload):
+    return fletcher(payload)
+
+def check_checksum(payload: bytes, received_checksum):
+    if fletcher(payload) == received_checksum:
+        return True
+    else:
+        print("Segment is damaged")
+        return False
+
+
+# Packet structure: [sequence_num (4 bytes), acknowledgement_num (4 bytes), flags (1 byte), length (2 bytes), checksum (2 bytes), window (1 byte)]
+def sending_packet(flags, message, sock, ip_opp_peer, port_opp_peer_receive, sequence_num, window):
     flags_to_send = 0b00000000
     # encoding the flags into bits
     if "SYN" in flags: #synchronisation
@@ -20,11 +39,9 @@ def sending_packet(flags, message, sock, ip_opp_peer, port_opp_peer_receive):
        flags_to_send |= 0b01000000
     if "KEA" in flags: #keep-alive packet
         flags_to_send |= 0b10000000
-    sequence_num = 0
     acknowledgement_num = 0
-    checksum = 0
+    checksum = create_checksum(message)
     length = len(message)
-    window = 0
     packet = (struct.pack(
         '!II', sequence_num, acknowledgement_num
     )) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
@@ -38,39 +55,29 @@ def receiving_messages(sock):
     packet, (ip_opp_peer_fr, port) = sock.recvfrom(1450)
 
     header = packet[:header_size]
-
-    # unpacking header
-    sequence_num = int.from_bytes(header[0:4], 'big')  # 3 байта: Message ID (24 бита)
+    # unpacking message
+    sequence_num = int.from_bytes(header[0:4], 'big')
     acknowledgement_num = int.from_bytes(header[4:8], 'big')
     flags_to_receive = struct.unpack('!B', header[8:9])[0]
     length = int.from_bytes(header[9:11], 'big')
-    checksum = int.from_bytes(header[11:13], 'big')
+    received_checksum = int.from_bytes(header[11:13], 'big')
     window = header[13]
 
-
-    # decode payload
-    message = packet[header_size:].decode()  # Полезная нагрузка - после заголовка
+    message = packet[header_size:] # decode payload
     # decode flags
     flags = ""
-    if flags_to_receive & 0b00000001:
-        flags += "SYN"
-    if flags_to_receive & 0b00000010:
-        flags += "ACK"
-    if flags_to_receive & 0b00000100:
-        flags += "ERR"
-    if flags_to_receive & 0b00001000:
-        flags += "FIN"
-    if flags_to_receive & 0b00010000:
-        flags += "EXIT"
-    if flags_to_receive & 0b00100000:
-        flags += "DATA"
-    if flags_to_receive & 0b01000000:
-        flags += "TXT"
-    if flags_to_receive & 0b10000000:
-        flags += "KEA"
+    if flags_to_receive & 0b00000001: flags += "SYN"
+    if flags_to_receive & 0b00000010: flags += "ACK"
+    if flags_to_receive & 0b00000100: flags += "ERR"
+    if flags_to_receive & 0b00001000: flags += "FIN"
+    if flags_to_receive & 0b00010000: flags += "EXIT"
+    if flags_to_receive & 0b00100000: flags += "DATA"
+    if flags_to_receive & 0b01000000: flags += "TXT"
+    if flags_to_receive & 0b10000000: flags += "KEA"
 
-
-    return flags, sequence_num, length, acknowledgement_num, checksum, window, ip_opp_peer_fr, message
+    check_checksum_flag = check_checksum(message, received_checksum)
+    message.decode()
+    return flags, sequence_num, length, acknowledgement_num, check_checksum_flag, window, ip_opp_peer_fr, message
 
 
 
