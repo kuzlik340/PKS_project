@@ -4,7 +4,63 @@ import threading
 import select
 import sys
 import protocol
-import os
+import file_transfer
+
+
+class MessageHandler:
+    def __init__(self):
+        pass
+
+    def handle_keep_alive_ack(self, keep_alv_wait_answ):
+        keep_alv_wait_answ.clear()
+
+    def handle_keep_alive(self, keep_alv_received):
+        keep_alv_received.set()
+
+    def handle_data_receive(self, keep_alv_deactivate, packet_handler, send_data_ack):
+        keep_alv_deactivate.set()
+        print("RECEIVING DATA")
+        file_transfer.receive_data(packet_handler, send_data_ack)
+        keep_alv_deactivate.clear()
+
+    def handle_data_ack(self, acknowledge_data_wait):
+        acknowledge_data_wait.set()
+
+    def handle_exit(self, exit_ev):
+        print("\nClosing connection due to initiation from opponent peer", flush=True)
+        exit_ev.set()
+
+
+class ConnectionFlags:
+    def __init__(self):
+        self.exit_ev = threading.Event() # flag for exiting if other peer initiated exit from connection
+        self.keep_alv_wait_answ = threading.Event()  # wait for the answer when keep alive was sent
+        self.keep_alv_received = threading.Event() # flag if there was KEA flag received (have to send KEAACK)
+        self.exit_by_brok = threading.Event() # flag for exiting  by broken connection
+        self.acknowledge_data_wait = threading.Event() # flag to wait for acknowledge when sending data
+        self.keep_alv_deactivate = threading.Event() # flag for deactivating keep alive while sending or receiving data
+        self.send_data_ack = threading.Event() # flag to send the data acknowledge
+
+
+class KeepAliveHandler:
+    def __init__(self):
+        self.keep_alive_req_num = 0
+        self.i = 0
+
+    def reset_counter(self):
+        self.keep_alive_req_num = 0
+
+    def increment_counter(self):
+        self.keep_alive_req_num += 1
+
+    def reset_timer(self):
+        self.i = 0
+
+    def increment_timer(self):
+        self.i += 1
+
+
+
 
 # utility function that just finds peer IPs so you can see them and write them directly to the input of program
 def get_all_ip_addresses():
@@ -15,106 +71,6 @@ def get_all_ip_addresses():
                 ip_list.append(address.address)
     return ip_list
 
-
-def receive_file(sock, ack_send, output_dir="received_files"):
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Сначала получаем метаданные файла
-    flags, _, _, _, _, _, _, file_info = protocol.receiving_messages(sock)
-    file_info = file_info.decode()
-
-    # Метаданные содержат имя файла и общий размер
-    filename, file_size = file_info.split(":")
-    file_size = int(file_size)
-
-    # Путь, куда будем сохранять файл
-    output_path = os.path.join(output_dir, filename)
-
-    window = 5
-
-    if "DATA" in flags:
-        # Открываем файл на запись в бинарном режиме
-        received_size = 0
-        with open(output_path, "wb") as f:
-            while True:
-                window_increment = 0
-                while window_increment < window:
-                    # Принимаем фрагмент данных
-                    flags, _, _, _, _, win, _, fragment = protocol.receiving_messages(sock)  # Получаем данные, размер буфера можно настроить
-                    window_increment += 1
-                    # Если фрагмент пустой, завершаем цикл
-                    if "FIN" in flags:
-                        print(f"File {filename} received successfully and saved to {output_path}")
-                        ack_send.set()
-                        f.write(fragment)
-                        received_size += len(fragment)
-                        while True:
-                            if not ack_send.is_set():
-                                break
-                        return
-                    if "DATA" in flags:
-                        f.write(fragment)
-                        received_size += len(fragment)
-                        print(f"Received {received_size}/{file_size} bytes")
-
-                ack_send.set()
-                while True:
-                    if not ack_send.is_set():
-                        break
-
-
-
-def send_data(sock, ip_opp_peer, port_opp_peer_receive, acknowledge_data_wait):
-    protocol.sending_packet("DATA", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-    file_path = input("Enter the path to the file you want to send: ")
-    window = 5
-    window_increment = 0
-
-    if not os.path.isfile(file_path):
-        print("File not found. Please check the path and try again.")
-        return
-
-    segment_size = int(input("What size of segment you want to use? (choose from 1 to 1400): "))
-    if segment_size <= 0 or segment_size > 1400:
-        print("Invalid segment size")
-        return
-
-
-    file_size = os.path.getsize(file_path)
-    print(file_size)
-    file_name = os.path.basename(file_path)
-    print(file_name)
-    file_info = file_name + ":" + str(file_size)
-    print(file_info)
-    protocol.sending_packet("DATA", file_info.encode(), sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-
-    total_segments = (file_size + segment_size - 1) // segment_size  # Округление вверх
-    if window > total_segments:
-        window = total_segments
-    print(f"Sending file in {total_segments} segments.")
-    seq_num = 0
-    iteration_windows = total_segments // window
-    with open(file_path, 'rb') as file:
-        for i in range(iteration_windows):
-            while window_increment < window:
-                if total_segments - (i * window) < window:
-                    print("TOTAL" + str(total_segments - (i * window)))
-                    window = total_segments - (i * window)
-                segment_data = file.read(segment_size)
-                if seq_num == total_segments - 1:
-                    protocol.sending_packet("DATAFIN", segment_data, sock, ip_opp_peer, port_opp_peer_receive, seq_num,
-                                            window)
-                    break
-                protocol.sending_packet("DATA", segment_data, sock, ip_opp_peer, port_opp_peer_receive, seq_num, window)
-                window_increment += 1
-                seq_num += 1
-            while True:
-                if acknowledge_data_wait.is_set():
-                    acknowledge_data_wait.clear()
-                    window_increment = 0
-                    print("DATAACK received")
-                    break
-    return
 
 
 # function that makes the input function in the sending_message not blocking so code can handle the situation
@@ -127,133 +83,123 @@ def non_blocking_input(timeout):
     else:
         return None
 
+
+def handle_keep_alive(handler, packet_handler, flags):
+    if handler.keep_alive_req_num == 3:  # если не было ответа на 3 пакета
+        print("\nThe connection with the opposite peer was broken, shutting down...")
+        flags.exit_by_brok.set()  # завершение соединения
+        return True
+    if handler.i == 5 and not flags.keep_alv_deactivate.is_set():  # отправляем запрос keep-alive каждые 5 секунд
+        packet_handler.sending_packet("KEA", b"", 0, 1)
+        flags.keep_alv_wait_answ.set()  # ожидание ответа
+        handler.increment_counter()
+        handler.reset_timer()
+    if flags.keep_alv_received.is_set():
+        packet_handler.sending_packet("KEAACK", b"", 0, 1)
+        flags.keep_alv_received.clear()
+    if not flags.keep_alv_wait_answ.is_set():  # если мы не ожидаем KEAACK, соединение в порядке
+        handler.reset_counter()
+    if flags.keep_alv_deactivate.is_set():
+        handler.reset_timer()
+    return False
+
 # function to send all data, currently only text messages from terminal
-def sending_messages(sock, ip_opp_peer, port_opp_peer_receive, exit_ev, keep_alv_wait_answ, keep_alv_received, exit_by_brok, acknowledge_data_wait, keep_alv_deactivate, send_data_ack):
-    print("Put your message here:", end="", flush=True)
-    i = 0
-    broke_conn = 0
-    while not exit_ev.is_set():
-        i += 1
+def sending_messages(packet_handler, flags):
+    keep_alv_handler = KeepAliveHandler()
+    while not flags.exit_ev.is_set():
+        keep_alv_handler.increment_timer()
         message = non_blocking_input(1)
         # if there is no message from this peer then just check exit_ev that handles disconnect from another peer
-        if message is None:
-            if broke_conn == 3:
-                print("the connection with opposite peer was broken, shutting down...")
-                exit_by_brok.set()
+        if message is None: # since we have non-blocking input with interval 1 second we can use this cycle
+            if handle_keep_alive(keep_alv_handler, packet_handler, flags):
                 break
-            if i == 5 and not keep_alv_deactivate.is_set():
-                protocol.sending_packet("KEA", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-                keep_alv_wait_answ.set()
-                broke_conn += 1
-                i = 0
-            if keep_alv_received.is_set():
-                broke_conn = 0
-                protocol.sending_packet("KEAACK", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-                keep_alv_received.clear()
-            if not keep_alv_wait_answ.is_set():
-                broke_conn = 0
-            if send_data_ack.is_set():
-                protocol.sending_packet("DATAACK", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-                send_data_ack.clear()
-            if keep_alv_deactivate.is_set():
-                i = 0
+            if flags.send_data_ack.is_set():
+                packet_handler.sending_packet("DATAACK", b"", 0, 1)
+                flags.send_data_ack.clear()
             continue
         if message == "DATA":
-            keep_alv_deactivate.set()
-            send_data(sock, ip_opp_peer, port_opp_peer_receive, acknowledge_data_wait)
-            keep_alv_deactivate.clear()
+            flags.keep_alv_deactivate.set()
+            file_transfer.send_data(packet_handler, flags.acknowledge_data_wait)
+            flags.keep_alv_deactivate.clear()
+            continue
         # if this peer initiated exit
         if message == "exit":
             print("\nClosing connection...", flush=True)
             print("Opposite peer will sleep automatically", flush=True)
-            protocol.sending_packet("EXIT", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
+            packet_handler.sending_packet("EXIT", b"", 0, 1)
             break
-        protocol.sending_packet("TXT", message.encode(), sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
+        packet_handler.sending_packet("TXT", message.encode(), 0, 1)
 
-# info about exit flags. Peer that initiated the exit sends an empty packet with EXIT flag and
-# opponent peer have to send the EXIT and ACK packet
+
 
 # function to receive all data, currently only text messages from another peer (this function works in parallel thread)
-def receiving_messages(sock, exit_ev, keep_alv_wait_answ, keep_alv_received, exit_by_brok, acknowledge_data_wait, keep_alv_deactivate, send_data_ack):
-   while not exit_by_brok.is_set():
+def receiving_messages(packet_handler, flags):
+   handler = MessageHandler()
+   sock = packet_handler.get_socket()
+   while not flags.exit_by_brok.is_set():
        ready_socks, _, _ = select.select([sock], [], [], 0.5)
        if ready_socks:
-           flags, _, _, _, _, _, _, message = protocol.receiving_messages(sock)
-           if keep_alv_wait_answ.is_set(): # if flag "we have to receive KEAACK" is setted
-               if "KEA" in flags and "ACK" in flags: # check if packet is with the KEAACK flags
-                   keep_alv_wait_answ.clear()
-                   continue
-           if "KEA" in flags and "ACK" not in flags:
-               keep_alv_received.set() # if we recieved the KEA flag and we have to send the KEAACK
+           flags, _, _, _, _, _, _, message = packet_handler.receiving_messages()
+           if flags.keep_alv_wait_answ.is_set() and "KEA" in flags and "ACK" in flags:
+               handler.handle_keep_alive_ack(flags.keep_alv_wait_answ)
                continue
-           if "DATA" in flags and "ACK" not in flags: # todo keep alive not working after data receiving
-               keep_alv_deactivate.set()
-               print("RECEIVING DATA")
-               receive_file(sock, send_data_ack)
-               print("Activating keep alive")
-               keep_alv_deactivate.clear()
-               print("Keep alive status after file transfer:", keep_alv_deactivate.is_set())
-           if "DATA" in flags and "ACK" in flags:
-               acknowledge_data_wait.set()
-           if "EXIT" in flags and "ACK" not in flags:
-               print("\nClosing connection due to initiation from opponent peer", flush=True)
-               exit_ev.set()
+           elif "KEA" in flags and "ACK" not in flags:
+               handler.handle_keep_alive(flags.keep_alv_received)
+               continue
+           elif "DATA" in flags and "ACK" not in flags:
+               handler.handle_data_receive(flags.keep_alv_deactivate, packet_handler, flags.send_data_ack)
+               continue
+           elif "DATA" in flags and "ACK" in flags:
+               handler.handle_data_ack(flags.acknowledge_data_wait)
+               print("Put your message here:", end="", flush=True)
+               continue
+           elif "EXIT" in flags and "ACK" not in flags:
                break # here we have to break cause from this thread we are only receiving the packets
-               # main thread will send the EXIT ACK packet
-           if "EXIT" in flags and "ACK" in flags:
+           elif "EXIT" in flags and "ACK" in flags:
+               handler.handle_exit(flags.exit_ev)
                break
                # here the code just breaks thread because so the main thread can stop this thread
-           print(f"\nMessage recieved: {message}")
-           print("Put your message here:", end="", flush=True)
+           elif "TXT" in flags:
+               print(f"\nMessage recieved: {message}")
+               print("Put your message here:", end="", flush=True)
+
 
 # function to start conversation between the peers
-def start_conversation(sock, ip_opp_peer, port_opp_peer_receive):
+def start_conversation(packet_handler):
     # unsetting timeout
+    sock = packet_handler.get_socket()
     sock.settimeout(None)
-    # creating an event to handle exit initiated from other peer
-    exit_ev = threading.Event() # flag for exiting if other peer initiated exit from connection
-    keep_alv_wait_answ = threading.Event()  # wait for the answer when keep alive was sent
-    keep_alv_received = threading.Event() # flag if there was KEA flag received (have to send KEAACK)
-    exit_by_brok = threading.Event() # flag for exiting  by broken connection
-    acknowledge_data_wait = threading.Event() # flag to wait for acknowledge when sending data
-    keep_alv_deactivate = threading.Event() # flag for deactivating keep alive while sending or receiving data
-    send_data_ack = threading.Event() # flag to send the data acknowledge
+    flags = ConnectionFlags()
+
     # creating second thread for receiving messages
-    receive_thread1 = threading.Thread(target=receiving_messages, args=(sock, exit_ev, keep_alv_wait_answ, keep_alv_received, exit_by_brok, acknowledge_data_wait, keep_alv_deactivate, send_data_ack))
+    receive_thread1 = threading.Thread(target=receiving_messages, args=(packet_handler, flags))
     receive_thread1.daemon = True
     receive_thread1.start()
+
     print("If you want to send files please put the 'DATA' into terminal")
     # starting in main thread the function to send messages
-    sending_messages(sock, ip_opp_peer, port_opp_peer_receive, exit_ev, keep_alv_wait_answ, keep_alv_received, exit_by_brok, acknowledge_data_wait, keep_alv_deactivate, send_data_ack)
+    sending_messages(packet_handler, flags)
+
     # this if is for the case where exit was initiated from other peer
-    if exit_ev.is_set():
-        protocol.sending_packet("EXITACK", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
+    if flags.exit_ev.is_set():
+        packet_handler.sending_packet("EXITACK", b"", 0, 1)
     # waiting for parallel thread to stop
     receive_thread1.join()
-    sock.close()
-
-
-
-
-
-
-
-
-
-
+    packet_handler.socket_close()
 
 
 
 # mode to send the SYN and then wait for the SYNACK and after send the ACK
-def master_mode(sock, ip_opp_peer, port_opp_peer_receive):
+def master_mode(packet_handler):
+    sock = packet_handler.get_socket()
     while True:
-        protocol.sending_packet("SYN", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
+        packet_handler.sending_packet("SYN", b"", 0, 1)
         ready, _, _ = select.select([sock], [], [], 2)
         try:
             if ready:
-                flags, _, _, _, _, _, ip_addr_opp_fr, _ = protocol.receiving_messages(sock)
+                flags, _, _, _, _, _, _, _ = packet_handler.receiving_messages()
                 if "SYN" in flags and "ACK" in flags:
-                    protocol.sending_packet("ACK", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
+                    packet_handler.sending_packet("ACK", b"", 0, 1)
                     print("Connection succesful!")
                     return
         except socket.timeout:
@@ -261,18 +207,19 @@ def master_mode(sock, ip_opp_peer, port_opp_peer_receive):
             exit(1)
 
 # mode to send the SYNACK if there was SYN packet
-def slave_mode(sock, ip_opp_peer, port_opp_peer_receive):
+def slave_mode(packet_handler):
     print("Creating connection due to initiation from another peer...")
-    flags, _, _, _, _, _, ip_addr_opp_fr, _ = protocol.receiving_messages(sock)
+    flags, _, _, _, _, _, ip_addr_opp_fr, _ = packet_handler.receiving_messages()
     if "SYN" in flags and "ACK" not in flags:
-        protocol.sending_packet("SYNACK", b"", sock, ip_opp_peer, port_opp_peer_receive, 0, 1)
-        flags, *_ = protocol.receiving_messages(sock)
+        packet_handler.sending_packet("SYNACK", b"", 0, 1)
+        flags, *_ = packet_handler.receiving_messages()
         if "ACK" in flags:
             print("Connection successful!")
             return
 
 # handshake function to create connection
-def handshake(sock, ip_opp_peer, port_opp_peer_receive):
+def handshake(packet_handler):
+    sock = packet_handler.get_socket()
     sock.settimeout(60)
     print("Create connection?[Y/n]")
     while True:
@@ -283,7 +230,7 @@ def handshake(sock, ip_opp_peer, port_opp_peer_receive):
         try:
             if sock in ready:
                 # a case where this peer received some packet (99.9% SYN from other peer)
-                slave_mode(sock, ip_opp_peer, port_opp_peer_receive)
+                slave_mode(packet_handler)
                 break
         except socket.timeout:
             # if there were no signals from other peer for 60 seconds then peer will shut down
@@ -295,7 +242,7 @@ def handshake(sock, ip_opp_peer, port_opp_peer_receive):
             if m.lower() == "y":
                 # this is a case where this peer initiated connection
                 print("Creating connection...")
-                master_mode(sock, ip_opp_peer, port_opp_peer_receive)
+                master_mode(packet_handler)
                 break
             elif m.lower() == "n":
                 print("Turning off...")
@@ -308,10 +255,11 @@ def create_p2p_connection(ip_opp_peer, port_opp_peer_receive, port_peer_receive)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # binding the receiving port on this peer so we can listen by port
     sock.bind(('', port_peer_receive))
+    packet_handler = protocol.PacketHandler(sock, ip_opp_peer, port_opp_peer_receive)
     # create handshake
-    handshake(sock, ip_opp_peer, port_opp_peer_receive)
+    handshake(packet_handler)
     # if there were no exits from the handshake then start the conversation between peers
-    start_conversation(sock, ip_opp_peer, port_opp_peer_receive)
+    start_conversation(packet_handler)
 
 # setup function where user sets up all the input data
 def setup():
