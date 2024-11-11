@@ -32,7 +32,7 @@ class PacketHandler:
     def socket_close(self):
         self.sock.close()
 
-    def sending_packet(self, flags, message, sequence_num, window):
+    def send_packet(self, flags, message, sequence_num, window):
         flags_to_send = 0b00000000
         # Encoding the flags into bits
         if "SYN" in flags:
@@ -61,9 +61,13 @@ class PacketHandler:
         packet += message
         self.sock.sendto(packet, (self.ip_opp_peer, self.port_opp_peer_receive))
 
-    def receiving_messages(self):
+    def receive_packet(self):
         header_size = 14
-        packet, (ip_opp_peer_fr, port) = self.sock.recvfrom(1450)
+        try:
+            packet, (ip_opp_peer_fr, port) = self.sock.recvfrom(1450) #maybe 1500??
+        except socket.timeout:
+            print("Timeout reached: No response received within 15 seconds.")
+            return False
 
         header = packet[:header_size]
         # Unpacking message
@@ -87,5 +91,4 @@ class PacketHandler:
         if flags_to_receive & 0b10000000: flags += "KEA"
 
         check_checksum_flag = check_checksum(message, received_checksum)
-        message.decode()
         return flags, sequence_num, length, acknowledgement_num, check_checksum_flag, window, ip_opp_peer_fr, message
