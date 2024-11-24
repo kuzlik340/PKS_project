@@ -5,28 +5,17 @@ import select
 import sys
 import protocol
 import file_transfer
-
+import time
+import logging
 
 # class that contains all functions to handle received packet
 class MessageHandler:
     def __init__(self):
         pass
 
-    def handle_keep_alive_ack(self, keep_alv_wait_answ):
-        keep_alv_wait_answ.clear()
-
-    def handle_keep_alive(self, keep_alv_received):
-        keep_alv_received.set()
-
-    def handle_data_receive(self, keep_alv_deactivate, packet_handler, send_data_ack):
-        keep_alv_deactivate.set()
+    def handle_data_receive(self, packet_handler, keep_alive):
         print("RECEIVING DATA")
-        file_transfer.receive_data(packet_handler, send_data_ack)
-        print("Activating keep alive")
-        keep_alv_deactivate.clear()
-
-    def handle_data_ack(self, acknowledge_data_wait):
-        acknowledge_data_wait.set()
+        file_transfer.receive_data(packet_handler, keep_alive)
 
     def handle_exit(self, exit_ev):
         print("\nClosing connection due to initiation from opponent peer", flush=True)
@@ -36,31 +25,61 @@ class MessageHandler:
 class ConnectionFlags:
     def __init__(self):
         self.exit_ev = threading.Event() # flag for exiting if other peer initiated exit from connection
-        self.keep_alv_wait_answ = threading.Event()  # wait for the answer when keep alive was sent
-        self.keep_alv_received = threading.Event() # flag if there was KEA flag received (have to send KEAACK)
         self.exit_by_brok = threading.Event() # flag for exiting  by broken connection
-        self.acknowledge_data_wait = threading.Event() # flag to wait for acknowledge when sending data
-        self.keep_alv_deactivate = threading.Event() # flag for deactivating keep alive while sending or receiving data
-        self.send_data_ack = threading.Event() # flag to send the data acknowledge
+        self.block_default_recv = threading.Event()
+        self.block_default_send = threading.Event()
 
-# class with all main functions for keep alive mechanism
-class KeepAliveHandler:
-    def __init__(self):
-        self.keep_alive_req_num = 0
-        self.timer = 0
+class KeepAlive:
+    def __init__(self, packet_handler, timeout=5, max_retries=3):
+        """
+        :param packet_handler: Объект, через который отправляются пакеты.
+        :param timeout: Интервал между запросами в секундах.
+        :param max_retries: Максимальное количество попыток без ответа.
+        """
+        self.packet_handler = packet_handler
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.is_alive = None
 
-    def reset_counter(self):
-        self.keep_alive_req_num = 0
+        self.retries = 0
+        self.running = False
+        self.lock = threading.Lock()
 
-    def increment_counter(self):
-        self.keep_alive_req_num += 1
+    def start(self):
+        """Запускает keep-alive."""
+        self.running = True
+        self.is_alive = None
+        self.retries = 0
+        threading.Thread(target=self._run, daemon=True).start()
 
-    def reset_timer(self):
-        self.timer = 0
+    def stop(self):
+        """Останавливает keep-alive."""
+        with self.lock:
+            self.running = False
 
-    def increment_timer(self):
-        self.timer += 1
+    def acknowledge(self):
+        """Сбрасывает счётчик при получении `KEAACK`."""
+        with self.lock:
+            self.retries = 0
+            self.is_alive = True
 
+    def _run(self):
+        """Цикл keep-alive."""
+        while True:
+            with self.lock:
+                if not self.running:
+                    break
+                if self.retries >= self.max_retries:
+                    self.running = False
+                    self.is_alive = False
+                    break
+
+                # Отправляем KEA
+                self.packet_handler.send_packet("KEA", b"", 0, 1)
+                print("Kea send")
+                self.retries += 1
+
+            time.sleep(self.timeout)
 
 
 
@@ -86,54 +105,27 @@ def non_blocking_input(timeout):
         return None
 
 
-def handle_keep_alive(keep_alv_handler, packet_handler, threading_flags):
-    if keep_alv_handler.keep_alive_req_num == 3:  # If there was no answer for three requests
-        print("\nThe connection with the opposite peer was broken, shutting down...")
-        threading_flags.exit_by_brok.set()  # Breaking connection
-        return True
-    print(f"Keep alive{keep_alv_handler.timer}")
-    # Sending keep alive request every 5 seconds (this function is called every 1 second)
-    if keep_alv_handler.timer == 5 and not threading_flags.keep_alv_deactivate.is_set():
-        print("Sending KEA")
-        packet_handler.send_packet("KEA", b"", 0, 1)
-        # setting the flag to wait for an answer from other peer in receiving thread
-        threading_flags.keep_alv_wait_answ.set()
-        # incrementing the counter of already sent packets
-        keep_alv_handler.increment_counter()
-        keep_alv_handler.reset_timer()
-    if threading_flags.keep_alv_received.is_set():
-        # if there was received packet with "KEA" flag
-        packet_handler.send_packet("KEAACK", b"", 0, 1)
-        threading_flags.keep_alv_received.clear()
-    # if we are not waiting for the KEAACK then reset counter of already sent requests
-    # this event will be only if other peer responded on last keep alive request
-    if not threading_flags.keep_alv_wait_answ.is_set():
-        keep_alv_handler.reset_counter()
-    if threading_flags.keep_alv_deactivate.is_set():
-        print("keep alive resetting")
-        keep_alv_handler.reset_timer()
-    return False
 
-# function to send all data, currently only text messages from terminal
-def sending_messages(packet_handler, threading_flags):
+# function to send all data, currently on ly text messages from terminal
+def sending_messages(packet_handler, threading_flags, keep_alive):
     # creating an object that will handle keep alive mechanism
-    keep_alv_handler = KeepAliveHandler()
     while not threading_flags.exit_ev.is_set():
-        keep_alv_handler.increment_timer()
         message = non_blocking_input(1)
+        while threading_flags.block_default_send.is_set():
+            pass
         # if there is no message from this peer then just check exit_ev that handles disconnect from another peer
         if message is None: # since we have non-blocking input with interval 1 second we can use this cycle
-            if handle_keep_alive(keep_alv_handler, packet_handler, threading_flags):
+            if keep_alive.is_alive is not None and not keep_alive.is_alive:
+                print("Broken connection, no answer from peer. Shutting down.")
+                threading_flags.exit_by_brok.set()
                 break
-            if threading_flags.send_data_ack.is_set():
-                packet_handler.send_packet("DATAACK", b"", 0, 1)
-                threading_flags.send_data_ack.clear()
             continue
         if message == "DATA":
-            threading_flags.keep_alv_deactivate.set()
-            keep_alv_handler.reset_timer()
-            file_transfer.send_data(packet_handler, threading_flags.acknowledge_data_wait)
-            threading_flags.keep_alv_deactivate.clear()
+            keep_alive.stop()
+            threading_flags.block_default_recv.set()
+            file_transfer.send_data(packet_handler)
+            threading_flags.block_default_recv.clear()
+            keep_alive.start()
             continue
         # if this peer initiated exit
         if message == "exit":
@@ -146,32 +138,35 @@ def sending_messages(packet_handler, threading_flags):
 
 
 # function to receive all data, currently only text messages from another peer (this function works in parallel thread)
-def receiving_messages(packet_handler, threading_flags):
+def receiving_messages(packet_handler, threading_flags, keep_alive):
    # creating an object that will handle all packets that we received
    handler = MessageHandler()
    # getting the socket from Packet Handler class so we can use it in the 'select' function
    sock = packet_handler.get_socket()
-   while not threading_flags.exit_by_brok.is_set():
+   while not threading_flags.exit_by_brok.is_set() and not threading_flags.exit_ev.is_set():
        ready_socks, _, _ = select.select([sock], [], [], 0.5)
+       while threading_flags.block_default_recv.is_set():
+            pass
        if ready_socks:
-           flags, _, _, _, _, _, _, message = packet_handler.receive_packet()
-           if threading_flags.keep_alv_wait_answ.is_set() and "KEA" in flags and "ACK" in flags:
-               handler.handle_keep_alive_ack(threading_flags.keep_alv_wait_answ)
+           flags, sequence_num, _, _, _, message = packet_handler.receive_packet()
+           if "KEA" and "ACK" in flags:
+               keep_alive.acknowledge()
                continue
            elif "KEA" in flags and "ACK" not in flags:
-               handler.handle_keep_alive(threading_flags.keep_alv_received)
+               packet_handler.send_packet("KEAACK", b"", 0, 1)
                continue
            elif "DATA" in flags and "ACK" not in flags:
-               handler.handle_data_receive(threading_flags.keep_alv_deactivate, packet_handler, threading_flags.send_data_ack)
-               continue
-           elif "DATA" in flags and "ACK" in flags:
-               handler.handle_data_ack(threading_flags.acknowledge_data_wait)
-               print("Put your message here:", end="", flush=True)
+               keep_alive.stop()
+               threading_flags.block_default_send.set()
+               handler.handle_data_receive(packet_handler, keep_alive)
+               threading_flags.block_default_send.clear()
+               keep_alive.start()
                continue
            elif "EXIT" in flags and "ACK" not in flags:
+               print("exit received")
+               handler.handle_exit(threading_flags.exit_ev)
                break # here we have to break cause from this thread we are only receiving the packets
            elif "EXIT" in flags and "ACK" in flags:
-               handler.handle_exit(threading_flags.exit_ev)
                break
                # here the code just breaks thread because so the main thread can stop this thread
            elif "TXT" in flags:
@@ -185,15 +180,16 @@ def start_conversation(packet_handler):
     sock = packet_handler.get_socket()
     sock.settimeout(None)
     threading_flags = ConnectionFlags()
-
+    keep_alive = KeepAlive(packet_handler)
+    keep_alive.start()
     # creating second thread for receiving messages
-    receive_thread1 = threading.Thread(target=receiving_messages, args=(packet_handler, threading_flags))
+    receive_thread1 = threading.Thread(target=receiving_messages, args=(packet_handler, threading_flags, keep_alive))
     receive_thread1.daemon = True
     receive_thread1.start()
 
     print("If you want to send files please put the 'DATA' into terminal")
     # starting in main thread the function to send messages
-    sending_messages(packet_handler, threading_flags)
+    sending_messages(packet_handler, threading_flags, keep_alive)
 
     # this if is for the case where exit was initiated from other peer
     if threading_flags.exit_ev.is_set():
@@ -212,7 +208,7 @@ def master_mode(packet_handler):
         ready, _, _ = select.select([sock], [], [], 2)
         try:
             if ready:
-                flags, _, _, _, _, _, _, _ = packet_handler.receive_packet()
+                flags, _, _, _, _, _ = packet_handler.receive_packet()
                 if "SYN" in flags and "ACK" in flags:
                     packet_handler.send_packet("ACK", b"", 0, 1)
                     print("Connection succesful!")
@@ -224,7 +220,7 @@ def master_mode(packet_handler):
 # mode to send the SYNACK if there was SYN packet
 def slave_mode(packet_handler):
     print("Creating connection due to initiation from another peer...")
-    flags, _, _, _, _, _, ip_addr_opp_fr, _ = packet_handler.receive_packet()
+    flags, _, _, _, _, _ = packet_handler.receive_packet()
     if "SYN" in flags and "ACK" not in flags:
         packet_handler.send_packet("SYNACK", b"", 0, 1)
         flags, *_ = packet_handler.receive_packet()

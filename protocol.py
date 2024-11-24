@@ -1,5 +1,7 @@
 import struct
 import socket
+import random
+
 
 def fletcher(data: bytes) -> int:
     sum1 = 0
@@ -16,8 +18,14 @@ def check_checksum(payload: bytes, received_checksum):
     if fletcher(payload) == received_checksum:
         return True
     else:
-        print("Segment is damaged")
         return False
+
+def damage_segment(checksum):
+    if random.random() > 0.998:
+        print("Packet was damaged")
+        return 1234
+    else:
+        return checksum
 
 
 class PacketHandler:
@@ -51,20 +59,26 @@ class PacketHandler:
             flags_to_send |= 0b01000000
         if "KEA" in flags:
             flags_to_send |= 0b10000000
-        acknowledgement_num = 0
         checksum = create_checksum(message)
+        checksum = damage_segment(checksum)
         length = len(message)
         packet = (struct.pack(
-            '!II', sequence_num, acknowledgement_num
-        )) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
+            '!I', sequence_num)) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
 
         packet += message
-        self.sock.sendto(packet, (self.ip_opp_peer, self.port_opp_peer_receive))
+        if random.random() > 0.999:
+            print("Packet was lost")
+            return False
+        try:
+            self.sock.sendto(packet, (self.ip_opp_peer, self.port_opp_peer_receive))
+        except OSError as e:
+            return False
+        return True
 
     def receive_packet(self):
-        header_size = 14
+        header_size = 10
         try:
-            packet, (ip_opp_peer_fr, port) = self.sock.recvfrom(1450) #maybe 1500??
+            packet, _ = self.sock.recvfrom(1500) #maybe 1500??
         except socket.timeout:
             print("Timeout reached: No response received within 15 seconds.")
             return False
@@ -72,11 +86,10 @@ class PacketHandler:
         header = packet[:header_size]
         # Unpacking message
         sequence_num = int.from_bytes(header[0:4], 'big')
-        acknowledgement_num = int.from_bytes(header[4:8], 'big')
-        flags_to_receive = struct.unpack('!B', header[8:9])[0]
-        length = int.from_bytes(header[9:11], 'big')
-        received_checksum = int.from_bytes(header[11:13], 'big')
-        window = header[13]
+        flags_to_receive = struct.unpack('!B', header[4:5])[0]
+        length = int.from_bytes(header[5:7], 'big')
+        received_checksum = int.from_bytes(header[7:9], 'big')
+        window = header[9]
 
         message = packet[header_size:]  # Decode payload
         # Decode flags
@@ -91,4 +104,4 @@ class PacketHandler:
         if flags_to_receive & 0b10000000: flags += "KEA"
 
         check_checksum_flag = check_checksum(message, received_checksum)
-        return flags, sequence_num, length, acknowledgement_num, check_checksum_flag, window, ip_opp_peer_fr, message
+        return flags, sequence_num, length, check_checksum_flag, window, message
