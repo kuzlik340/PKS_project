@@ -90,9 +90,9 @@ def non_blocking_input(timeout):
 
 
 def menu(packet_handler):
-    print("For enabling simulation of fragment damaging put 'enable_damage'")
-    print("For disabling simulation of fragment damaging put 'disable_damage'")
-    print("To change the fragment size put 'change_size'")
+    print("1. For \033[34menabling simulation\033[0m of fragment damaging put \033[34menable_damage\033[0m")
+    print("2. For \033[34mdisabling simulation\033[0m of fragment damaging put \033[34mdisable_damage\033[0m")
+    print("3. To \033[34mchange the fragment size\033[0m put \033[34m'change_size'\033[0m")
     choice = input()
     if choice == "enable_damage":
         packet_handler.set_damage(True)
@@ -143,14 +143,11 @@ def sending(packet_handler, threading_flags, keep_alive):
             menu(packet_handler)
             continue
         if message == "HELP":
-            print("If you want to send files please put the 'DATA' into terminal")
-            print("If you want to send messages please put the 'MESSAGE' into terminal")
-            print("If you want to disconnect please put the 'EXIT' into terminal")
-            print("If you want to change parameters for connection please put the 'MENU' into terminal")
+            print_help()
         if message == "MESSAGE":
             keep_alive.stop()
             threading_flags.block_default_recv.set()
-            file_transfer.send_text(packet_handler)
+            file_transfer.send_text(packet_handler, keep_alive)
             threading_flags.block_default_recv.clear()
             keep_alive.start()
         else:
@@ -196,6 +193,11 @@ def receiving(packet_handler, threading_flags, keep_alive):
                threading_flags.block_default_send.clear()
                keep_alive.start()
 
+def print_help():
+    print("1. If you want to send files please put the \033[34m'DATA'\033[0m into terminal")
+    print("2. If you want to send messages please put the \033[34m'MESSAGE'\033[0m into terminal")
+    print("3. If you want to disconnect please put the \033[34m'EXIT'\033[0m into terminal")
+    print("4. If you want to change parameters for connection please put the \033[34m'MENU'\033[0m into terminal")
 
 # function to start conversation between the peers
 def start_conversation(packet_handler):
@@ -209,14 +211,9 @@ def start_conversation(packet_handler):
     receive_thread = threading.Thread(target=receiving, args=(packet_handler, threading_flags, keep_alive))
     receive_thread.daemon = True
     receive_thread.start()
-
-    print("If you want to send files please put the 'DATA' into terminal")
-    print("If you want to send messages please put the 'MESSAGE' into terminal")
-    print("If you want to disconnect please put the 'EXIT' into terminal")
-    print("If you want to change parameters for connection please put the 'MENU' into terminal")
+    print_help()
     # starting in main thread the function to send messages
     sending(packet_handler, threading_flags, keep_alive)
-
     # this if is for the case where exit was initiated from other peer
     if threading_flags.exit_ev.is_set():
         packet_handler.send_packet("EXITACK", b"", 0, 1)
@@ -238,8 +235,10 @@ def master_mode(packet_handler):
                 flags, _, _, _, _, _ = packet_handler.receive_packet()
                 if "SYN" in flags and "ACK" in flags:
                     packet_handler.send_packet("ACK", b"", 0, 1)
-                    print("Connection succesful!")
-                    return
+                    print("\033[1;32mConnection successful!\033[0m")
+                    return False
+                else:
+                    return True
         except socket.timeout:
             print("Timeout on socket, restart code")
             exit(1)
@@ -252,8 +251,10 @@ def slave_mode(packet_handler):
         packet_handler.send_packet("SYNACK", b"", 0, 1)
         flags, *_ = packet_handler.receive_packet()
         if "ACK" in flags:
-            print("Connection successful!")
-            return
+            print("\033[1;32mConnection successful!\033[0m")
+            return False
+    else:
+        return True
 
 # handshake function to create connection
 def handshake(packet_handler):
@@ -268,7 +269,8 @@ def handshake(packet_handler):
         try:
             if sock in ready:
                 # a case where this peer received some packet (99.9% SYN from other peer)
-                slave_mode(packet_handler)
+                while slave_mode(packet_handler):
+                    pass
                 break
         except socket.timeout:
             # if there were no signals from other peer for 60 seconds then peer will shut down
@@ -280,7 +282,8 @@ def handshake(packet_handler):
             if m.lower() == "y":
                 # this is a case where this peer initiated connection
                 print("Creating connection...")
-                master_mode(packet_handler)
+                while master_mode(packet_handler):
+                    pass
                 break
             elif m.lower() == "n":
                 print("Turning off...")
