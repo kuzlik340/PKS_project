@@ -46,7 +46,7 @@ class PacketHandler:
     def socket_close(self):
         self.sock.close()
 
-    def send_packet(self, flags, message, sequence_num, window):
+    def send_packet(self, flags, message, sequence_num):
         flags_to_send = 0b00000000
         # Encoding the flags into bits
         if "SYN" in flags:
@@ -68,9 +68,8 @@ class PacketHandler:
         checksum = create_checksum(message)
         if self.damage:
             checksum = damage_segment(checksum)
-        length = len(message)
         packet = (struct.pack(
-            '!I', sequence_num)) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
+            '!I', sequence_num)) + (struct.pack('!BH', flags_to_send, checksum))
 
         packet += message
         if random.random() > 0.999 and self.damage:
@@ -83,20 +82,17 @@ class PacketHandler:
         return True
 
     def receive_packet(self):
-        header_size = 10
+        header_size = 7
         try:
-            packet, _ = self.sock.recvfrom(1500) #maybe 1500??
+            packet, _ = self.sock.recvfrom(1500)
         except socket.timeout:
-            print("Timeout reached: No response received within 5 seconds.")
             return False
 
         header = packet[:header_size]
         # Unpacking message
         sequence_num = int.from_bytes(header[0:4], 'big')
         flags_to_receive = struct.unpack('!B', header[4:5])[0]
-        length = int.from_bytes(header[5:7], 'big')
-        received_checksum = int.from_bytes(header[7:9], 'big')
-        window = header[9]
+        received_checksum = int.from_bytes(header[5:7], 'big')
 
         message = packet[header_size:]  # Decode payload
         # Decode flags
@@ -111,4 +107,4 @@ class PacketHandler:
         if flags_to_receive & 0b10000000: flags += "KEA"
 
         check_checksum_flag = check_checksum(message, received_checksum)
-        return flags, sequence_num, length, check_checksum_flag, window, message
+        return flags, sequence_num, check_checksum_flag, message

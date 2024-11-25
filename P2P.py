@@ -8,7 +8,7 @@ import file_transfer
 import time
 import logging
 
-# class that contains all flags between two threads, so threads cam communicate with each other
+# Class that contains all flags between two threads, so threads cam communicate with each other
 class ConnectionFlags:
     def __init__(self):
         self.exit_ev = threading.Event() # flag for exiting if other peer initiated exit from connection
@@ -16,13 +16,9 @@ class ConnectionFlags:
         self.block_default_recv = threading.Event()
         self.block_default_send = threading.Event()
 
+# Class that contains keep alive mechanism
 class KeepAlive:
     def __init__(self, packet_handler, timeout=5, max_retries=3):
-        """
-        :param packet_handler: Объект, через который отправляются пакеты.
-        :param timeout: Интервал между запросами в секундах.
-        :param max_retries: Максимальное количество попыток без ответа.
-        """
         self.packet_handler = packet_handler
         self.timeout = timeout
         self.max_retries = max_retries
@@ -33,25 +29,21 @@ class KeepAlive:
         self.lock = threading.Lock()
 
     def start(self):
-        """Запускает keep-alive."""
         self.running = True
         self.is_alive = None
         self.retries = 0
         threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
-        """Останавливает keep-alive."""
         with self.lock:
             self.running = False
 
     def acknowledge(self):
-        """Сбрасывает счётчик при получении `KEAACK`."""
         with self.lock:
             self.retries = 0
             self.is_alive = True
 
     def _run(self):
-        """Цикл keep-alive."""
         while True:
             with self.lock:
                 if not self.running:
@@ -61,10 +53,8 @@ class KeepAlive:
                     self.is_alive = False
                     break
 
-                # Отправляем KEA
-                self.packet_handler.send_packet("KEA", b"", 0, 1)
+                self.packet_handler.send_packet("KEA", b"", 0)
                 self.retries += 1
-
             time.sleep(self.timeout)
 
 
@@ -93,24 +83,31 @@ def menu(packet_handler):
     print("1. For \033[34menabling simulation\033[0m of fragment damaging put \033[34menable_damage\033[0m")
     print("2. For \033[34mdisabling simulation\033[0m of fragment damaging put \033[34mdisable_damage\033[0m")
     print("3. To \033[34mchange the fragment size\033[0m put \033[34m'change_size'\033[0m")
+    print("menu-config > ", end = '')
     choice = input()
     if choice == "enable_damage":
         packet_handler.set_damage(True)
         print("Simulation of damaging was enabled")
+        return
     if choice == "disable_damage":
         packet_handler.set_damage(False)
         print("Simulation of damaging was disabled")
+        return
     elif choice == "change_size":
         print("Choose fragment size from 1 to 1460 bytes")
+        print("menu-config > ", end='')
         fragment_size = int(input())
         while fragment_size > 1460 or fragment_size < 1:
             print("Invalid size")
             print("Choose fragment size from 1 to 1460 bytes")
+            print("menu-config > ", end='')
             fragment_size = int(input())
         packet_handler.fragment_size = fragment_size
         print(f"Fragment size set to {packet_handler.fragment_size}")
+        return
     else:
         print("Invalid input")
+        menu(packet_handler)
 
 # function to send all data, currently on ly text messages from terminal
 def sending(packet_handler, threading_flags, keep_alive):
@@ -118,6 +115,7 @@ def sending(packet_handler, threading_flags, keep_alive):
     while not threading_flags.exit_ev.is_set():
         message = non_blocking_input(1)
         while threading_flags.block_default_send.is_set():
+            time.sleep(0.5)
             pass
         # if there is no message from this peer then just check exit_ev that handles disconnect from another peer
         if message is None: # since we have non-blocking input with interval 1 second we can use this cycle
@@ -137,7 +135,7 @@ def sending(packet_handler, threading_flags, keep_alive):
         if message == "EXIT":
             print("\nClosing connection...", flush=True)
             print("Opposite peer will sleep automatically", flush=True)
-            packet_handler.send_packet("EXIT", b"", 0, 1)
+            packet_handler.send_packet("EXIT", b"", 0)
             break
         if message == "MENU":
             menu(packet_handler)
@@ -165,17 +163,20 @@ def receiving(packet_handler, threading_flags, keep_alive):
        while threading_flags.block_default_recv.is_set():
             pass
        if ready_socks:
-           flags, sequence_num, _, _, _, message = packet_handler.receive_packet()
+           flags, sequence_num, _, message = packet_handler.receive_packet()
            if "KEA" and "ACK" in flags:
                keep_alive.acknowledge()
                continue
            elif "KEA" in flags and "ACK" not in flags:
-               packet_handler.send_packet("KEAACK", b"", 0, 1)
+               packet_handler.send_packet("KEAACK", b"", 0)
                continue
            elif "DATA" in flags:
                keep_alive.stop()
                threading_flags.block_default_send.set()
-               file_transfer.receive_data(packet_handler, keep_alive)
+               if not file_transfer.receive_data(packet_handler, keep_alive):
+                   keep_alive.is_alive = False
+                   threading_flags.block_default_send.clear()
+                   exit(0)
                threading_flags.block_default_send.clear()
                keep_alive.start()
                continue
@@ -189,7 +190,9 @@ def receiving(packet_handler, threading_flags, keep_alive):
            elif "TXT" in flags:
                keep_alive.stop()
                threading_flags.block_default_send.set()
-               file_transfer.receive_text(packet_handler, keep_alive)
+               if not file_transfer.receive_text(packet_handler, keep_alive):
+                   keep_alive.is_alive = False
+                   exit(0)
                threading_flags.block_default_send.clear()
                keep_alive.start()
 
@@ -216,8 +219,9 @@ def start_conversation(packet_handler):
     sending(packet_handler, threading_flags, keep_alive)
     # this if is for the case where exit was initiated from other peer
     if threading_flags.exit_ev.is_set():
-        packet_handler.send_packet("EXITACK", b"", 0, 1)
+        packet_handler.send_packet("EXITACK", b"", 0)
     threading_flags.exit_ev.set()
+    keep_alive.stop()
     # waiting for parallel thread to stop
     receive_thread.join()
     packet_handler.socket_close()
@@ -228,13 +232,13 @@ def start_conversation(packet_handler):
 def master_mode(packet_handler):
     sock = packet_handler.get_socket()
     while True:
-        packet_handler.send_packet("SYN", b"", 0, 1)
+        packet_handler.send_packet("SYN", b"", 0)
         ready, _, _ = select.select([sock], [], [], 2)
         try:
             if ready:
-                flags, _, _, _, _, _ = packet_handler.receive_packet()
+                flags, *_ = packet_handler.receive_packet()
                 if "SYN" in flags and "ACK" in flags:
-                    packet_handler.send_packet("ACK", b"", 0, 1)
+                    packet_handler.send_packet("ACK", b"", 0)
                     print("\033[1;32mConnection successful!\033[0m")
                     return False
                 else:
@@ -245,10 +249,10 @@ def master_mode(packet_handler):
 
 # mode to send the SYNACK if there was SYN packet
 def slave_mode(packet_handler):
-    print("Creating connection due to initiation from another peer...")
-    flags, _, _, _, _, _ = packet_handler.receive_packet()
+    flags, *_ = packet_handler.receive_packet()
     if "SYN" in flags and "ACK" not in flags:
-        packet_handler.send_packet("SYNACK", b"", 0, 1)
+        print("Creating connection due to initiation from another peer...")
+        packet_handler.send_packet("SYNACK", b"", 0)
         flags, *_ = packet_handler.receive_packet()
         if "ACK" in flags:
             print("\033[1;32mConnection successful!\033[0m")
