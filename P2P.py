@@ -8,19 +8,6 @@ import file_transfer
 import time
 import logging
 
-# class that contains all functions to handle received packet
-class MessageHandler:
-    def __init__(self):
-        pass
-
-    def handle_data_receive(self, packet_handler, keep_alive):
-        print("RECEIVING DATA")
-        file_transfer.receive_data(packet_handler, keep_alive)
-
-    def handle_exit(self, exit_ev):
-        print("\nClosing connection due to initiation from opponent peer", flush=True)
-        exit_ev.set()
-
 # class that contains all flags between two threads, so threads cam communicate with each other
 class ConnectionFlags:
     def __init__(self):
@@ -76,11 +63,9 @@ class KeepAlive:
 
                 # Отправляем KEA
                 self.packet_handler.send_packet("KEA", b"", 0, 1)
-                print("Kea send")
                 self.retries += 1
 
             time.sleep(self.timeout)
-
 
 
 # utility function that just finds peer IPs so you can see them and write them directly to the input of program
@@ -99,15 +84,36 @@ def get_all_ip_addresses():
 def non_blocking_input(timeout):
     ready, _, _ = select.select([sys.stdin], [], [], timeout)
     if ready:
-        print("Put your message here:", end ="", flush=True)
         return sys.stdin.readline().strip()
     else:
         return None
 
 
+def menu(packet_handler):
+    print("For enabling simulation of fragment damaging put 'enable_damage'")
+    print("For disabling simulation of fragment damaging put 'disable_damage'")
+    print("To change the fragment size put 'change_size'")
+    choice = input()
+    if choice == "enable_damage":
+        packet_handler.set_damage(True)
+        print("Simulation of damaging was enabled")
+    if choice == "disable_damage":
+        packet_handler.set_damage(False)
+        print("Simulation of damaging was disabled")
+    elif choice == "change_size":
+        print("Choose fragment size from 1 to 1460 bytes")
+        fragment_size = int(input())
+        while fragment_size > 1460 or fragment_size < 1:
+            print("Invalid size")
+            print("Choose fragment size from 1 to 1460 bytes")
+            fragment_size = int(input())
+        packet_handler.fragment_size = fragment_size
+        print(f"Fragment size set to {packet_handler.fragment_size}")
+    else:
+        print("Invalid input")
 
 # function to send all data, currently on ly text messages from terminal
-def sending_messages(packet_handler, threading_flags, keep_alive):
+def sending(packet_handler, threading_flags, keep_alive):
     # creating an object that will handle keep alive mechanism
     while not threading_flags.exit_ev.is_set():
         message = non_blocking_input(1)
@@ -116,31 +122,45 @@ def sending_messages(packet_handler, threading_flags, keep_alive):
         # if there is no message from this peer then just check exit_ev that handles disconnect from another peer
         if message is None: # since we have non-blocking input with interval 1 second we can use this cycle
             if keep_alive.is_alive is not None and not keep_alive.is_alive:
-                print("Broken connection, no answer from peer. Shutting down.")
+                print("Broken connection, no answer from peer. Shutting down...")
                 threading_flags.exit_by_brok.set()
                 break
             continue
         if message == "DATA":
             keep_alive.stop()
             threading_flags.block_default_recv.set()
-            file_transfer.send_data(packet_handler)
+            file_transfer.send_data(packet_handler, keep_alive)
             threading_flags.block_default_recv.clear()
             keep_alive.start()
             continue
         # if this peer initiated exit
-        if message == "exit":
+        if message == "EXIT":
             print("\nClosing connection...", flush=True)
             print("Opposite peer will sleep automatically", flush=True)
             packet_handler.send_packet("EXIT", b"", 0, 1)
             break
-        packet_handler.send_packet("TXT", message.encode(), 0, 1)
+        if message == "MENU":
+            menu(packet_handler)
+            continue
+        if message == "HELP":
+            print("If you want to send files please put the 'DATA' into terminal")
+            print("If you want to send messages please put the 'MESSAGE' into terminal")
+            print("If you want to disconnect please put the 'EXIT' into terminal")
+            print("If you want to change parameters for connection please put the 'MENU' into terminal")
+        if message == "MESSAGE":
+            keep_alive.stop()
+            threading_flags.block_default_recv.set()
+            file_transfer.send_text(packet_handler)
+            threading_flags.block_default_recv.clear()
+            keep_alive.start()
+        else:
+            print("Invalid input")
 
 
 
 # function to receive all data, currently only text messages from another peer (this function works in parallel thread)
-def receiving_messages(packet_handler, threading_flags, keep_alive):
+def receiving(packet_handler, threading_flags, keep_alive):
    # creating an object that will handle all packets that we received
-   handler = MessageHandler()
    # getting the socket from Packet Handler class so we can use it in the 'select' function
    sock = packet_handler.get_socket()
    while not threading_flags.exit_by_brok.is_set() and not threading_flags.exit_ev.is_set():
@@ -155,23 +175,26 @@ def receiving_messages(packet_handler, threading_flags, keep_alive):
            elif "KEA" in flags and "ACK" not in flags:
                packet_handler.send_packet("KEAACK", b"", 0, 1)
                continue
-           elif "DATA" in flags and "ACK" not in flags:
+           elif "DATA" in flags:
                keep_alive.stop()
                threading_flags.block_default_send.set()
-               handler.handle_data_receive(packet_handler, keep_alive)
+               file_transfer.receive_data(packet_handler, keep_alive)
                threading_flags.block_default_send.clear()
                keep_alive.start()
                continue
            elif "EXIT" in flags and "ACK" not in flags:
-               print("exit received")
-               handler.handle_exit(threading_flags.exit_ev)
+               print("Closing connection due to initiation from opposite peer")
+               threading_flags.exit_ev.set()
                break # here we have to break cause from this thread we are only receiving the packets
            elif "EXIT" in flags and "ACK" in flags:
                break
                # here the code just breaks thread because so the main thread can stop this thread
            elif "TXT" in flags:
-               print(f"\nMessage recieved: {message.decode()}")
-               print("Put your message here:", end="", flush=True)
+               keep_alive.stop()
+               threading_flags.block_default_send.set()
+               file_transfer.receive_text(packet_handler, keep_alive)
+               threading_flags.block_default_send.clear()
+               keep_alive.start()
 
 
 # function to start conversation between the peers
@@ -183,19 +206,23 @@ def start_conversation(packet_handler):
     keep_alive = KeepAlive(packet_handler)
     keep_alive.start()
     # creating second thread for receiving messages
-    receive_thread1 = threading.Thread(target=receiving_messages, args=(packet_handler, threading_flags, keep_alive))
-    receive_thread1.daemon = True
-    receive_thread1.start()
+    receive_thread = threading.Thread(target=receiving, args=(packet_handler, threading_flags, keep_alive))
+    receive_thread.daemon = True
+    receive_thread.start()
 
     print("If you want to send files please put the 'DATA' into terminal")
+    print("If you want to send messages please put the 'MESSAGE' into terminal")
+    print("If you want to disconnect please put the 'EXIT' into terminal")
+    print("If you want to change parameters for connection please put the 'MENU' into terminal")
     # starting in main thread the function to send messages
-    sending_messages(packet_handler, threading_flags, keep_alive)
+    sending(packet_handler, threading_flags, keep_alive)
 
     # this if is for the case where exit was initiated from other peer
     if threading_flags.exit_ev.is_set():
         packet_handler.send_packet("EXITACK", b"", 0, 1)
+    threading_flags.exit_ev.set()
     # waiting for parallel thread to stop
-    receive_thread1.join()
+    receive_thread.join()
     packet_handler.socket_close()
 
 
@@ -258,7 +285,6 @@ def handshake(packet_handler):
             elif m.lower() == "n":
                 print("Turning off...")
                 exit(0)
-
 
 
 def create_p2p_connection(ip_opp_peer, port_opp_peer_receive, port_peer_receive):

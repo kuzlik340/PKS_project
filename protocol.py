@@ -33,10 +33,16 @@ class PacketHandler:
         self.sock = sock
         self.ip_opp_peer = ip_opp_peer
         self.port_opp_peer_receive = port_opp_peer_receive
-
+        self.fragment_size = 1460
+        self.damage = False
     def get_socket(self):
         return self.sock
 
+    def set_fragment_size(self, fragment_size):
+        self.fragment_size = fragment_size
+
+    def set_damage(self, damage):
+        self.damage = damage
     def socket_close(self):
         self.sock.close()
 
@@ -60,13 +66,14 @@ class PacketHandler:
         if "KEA" in flags:
             flags_to_send |= 0b10000000
         checksum = create_checksum(message)
-        checksum = damage_segment(checksum)
+        if self.damage:
+            checksum = damage_segment(checksum)
         length = len(message)
         packet = (struct.pack(
             '!I', sequence_num)) + (struct.pack('!BHHB', flags_to_send, length, checksum, window))
 
         packet += message
-        if random.random() > 0.999:
+        if random.random() > 0.999 and self.damage:
             print("Packet was lost")
             return False
         try:
@@ -80,7 +87,7 @@ class PacketHandler:
         try:
             packet, _ = self.sock.recvfrom(1500) #maybe 1500??
         except socket.timeout:
-            print("Timeout reached: No response received within 15 seconds.")
+            print("Timeout reached: No response received within 5 seconds.")
             return False
 
         header = packet[:header_size]
