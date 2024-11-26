@@ -7,17 +7,19 @@ import time
 class FileTransfer:
     def __init__(self):
         # Default init
-        self.window_size = 15
+        self.window_size = 40
         self.window_base = 0
         self.error = False
         self.error_counter = 0
+        self.wait_counter = 0
     # This method is used only if number of fragments is smaller than window size
     def update_win(self, win_size):
         self.window_size = win_size
 
     # This method is used to slide the window
     def increment_base(self):
-        self.window_base += 14
+        self.wait_counter = 0
+        self.window_base += 1
 
     # This method is used to get transfer params
     def get_window_state(self):
@@ -202,8 +204,7 @@ def receive_data(packet_handler, keep_alive):
                     file.write(fragment)
                     received_size += len(fragment)
                     expected_seq_num = seq_num + 1
-                    if seq_num % 14 == 0 or seq_num == total_segments-1 or seq_num == total_segments:
-                        packet_handler.send_packet("DATAACK", b"", seq_num)
+                    packet_handler.send_packet("DATAACK", b"", seq_num)
                     print(f"{current_time} Fragment with sequence number {seq_num} and size {len(fragment)} bytes was received \033[1;32msuccessfully\033[0m")
                 if "FIN" in flags:
                     current_time = time.time()
@@ -294,7 +295,6 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
     next_seq_num = 0
     win_base, window_size = file_transfer_manager.get_window_state()
     total_sent_packets = 0
-    wait_counter = 0
     with open(file_path, 'rb') as file:
         while win_base < last_seq:
             if next_seq_num == last_seq:
@@ -321,8 +321,8 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
                 next_seq_num, _ = file_transfer_manager.get_window_state()
                 file_transfer_manager.unset_error()
             if next_seq_num == win_base + window_size:
-                wait_counter += 1
-                if wait_counter > 2:
+                file_transfer_manager.wait_counter += 1
+                if file_transfer_manager.wait_counter > 2:
                     keep_alive.start()
                     print("Starting keep alive")
                     while keep_alive.is_alive is None:
@@ -334,7 +334,7 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
                     else:
                         keep_alive.stop()
                         print("Continue transmitting")
-                        wait_counter = 0
+                        file_transfer_manager.wait_counter = 0
                         continue
                 next_seq_num = win_base
     return next_seq_num, window_size, total_sent_packets
