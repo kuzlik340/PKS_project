@@ -1,7 +1,9 @@
+import hashlib
 import os
 import threading
 from datetime import datetime
 import time
+import hashlib
 
 # Class for managing file transfer from the sender
 class FileTransfer:
@@ -94,14 +96,21 @@ def receive_text(packet_handler, keep_alive):
             # receiving as normal
             lost_packet_fl = True
             packet_handler.send_packet("TXTACK", b"", seq_num)
-            received_text.append(fragment.decode())
+            if not "FIN" in flags:
+                received_text.append(fragment.decode())
             expected_seq_num = seq_num + 1
             print(f"{current_time} Fragment with sequence number {seq_num} and size {len(fragment)} was received \033[1;32msuccessfully\033[0m")
         if "FIN" in flags:
             print("Text received successfully: ", end = '')
             print("".join(received_text))
+            complete_string = ''.join(received_text)
+            hashed = hash_sha256(complete_string)
+            print(f"Result of hash function on this peer:     {hashed.decode()}")
+            print(f"Result of hash function on opposite peer: {fragment.decode()}")
+            if hashed == fragment:
+                print("Hash control success")
             current_time = time.time()
-            print(f"Time for receiving was {current_time - start_time}")
+            print(f"\nTime for receiving was {current_time - start_time}")
             packet_handler.send_packet("TXTACK", b"", seq_num)
             socket.settimeout(None)
             break
@@ -128,7 +137,8 @@ def send_text(packet_handler, keep_alive):
     next_seq_num, window, total_sent_packets = gbn(packet_handler, file_transfer_manager, file_name, "TXT", first_ack, keep_alive)
 
     receive_ack_flag.set()
-    packet_handler.send_packet("TXTFIN", b"", next_seq_num)
+    hashed = hash_sha256(text)
+    packet_handler.send_packet("TXTFIN", hashed, next_seq_num)
     print("Text transfer completed.")
     print(f"Number of total sent segments = {total_sent_packets + 1}")
     receive_acks_thread.join()
@@ -270,6 +280,10 @@ def adaptive_window(file_transfer_manager, total_fragments):
         file_transfer_manager.update_win(int(window_size))
         return
 
+def hash_sha256(text):
+    return hashlib.sha256(text.encode('utf-8')).hexdigest().encode()
+
+
 
 def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_alive):
     fragment_size = packet_handler.fragment_size
@@ -304,7 +318,6 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
             file_offset = next_seq_num * fragment_size
             file.seek(file_offset)
             segment_data = file.read(fragment_size)
-
             packet_handler.send_packet(flag, segment_data, next_seq_num)
             current_time = datetime.now().strftime("[%H:%M:%S.%f]")
             print(f"{current_time} Packet {next_seq_num} was sent win_base = {win_base} and window_size = {window_size}")
@@ -326,6 +339,7 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
                     keep_alive.start()
                     print("Starting keep alive")
                     while keep_alive.is_alive is None:
+                        time.sleep(0.1)
                         pass
                     if not keep_alive.is_alive:
                         keep_alive.stop()
@@ -337,6 +351,7 @@ def gbn(packet_handler, file_transfer_manager, file_path, flag, first_ack, keep_
                         file_transfer_manager.wait_counter = 0
                         continue
                 next_seq_num = win_base
+    file_transfer_manager.wait_counter = 0
     return next_seq_num, window_size, total_sent_packets
 
 

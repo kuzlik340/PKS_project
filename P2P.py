@@ -6,7 +6,6 @@ import sys
 import protocol
 import file_transfer
 import time
-import logging
 
 # Class that contains all flags between two threads, so threads cam communicate with each other
 class ConnectionFlags:
@@ -83,6 +82,7 @@ def menu(packet_handler):
     print("1. For \033[34menabling simulation\033[0m of fragment damaging put \033[34menable_damage\033[0m")
     print("2. For \033[34mdisabling simulation\033[0m of fragment damaging put \033[34mdisable_damage\033[0m")
     print("3. To \033[34mchange the fragment size\033[0m put \033[34m'change_size'\033[0m")
+    print("4. To \033[34mexit menu\033[0m put \033[34m'exit'\033[0m")
     print("menu-config > ", end = '')
     choice = input()
     if choice == "enable_damage":
@@ -104,6 +104,8 @@ def menu(packet_handler):
             fragment_size = int(input())
         packet_handler.fragment_size = fragment_size
         print(f"Fragment size set to {packet_handler.fragment_size}")
+        return
+    elif choice == "exit":
         return
     else:
         print("Invalid input")
@@ -142,6 +144,7 @@ def sending(packet_handler, threading_flags, keep_alive):
             continue
         if message == "HELP":
             print_help()
+            continue
         if message == "MESSAGE":
             keep_alive.stop()
             threading_flags.block_default_recv.set()
