@@ -22,7 +22,6 @@ class KeepAlive:
         self.timeout = timeout
         self.max_retries = max_retries
         self.is_alive = None
-
         self.retries = 0
         self.running = False
         self.lock = threading.Lock()
