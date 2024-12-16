@@ -23,6 +23,7 @@ Go-Back-N method with an adaptive window.
 
 In code the encoder and decoder for the protocol header are contained in
 the protocol.py
+
 <img width="1103" alt="STN (1)" src="https://github.com/user-attachments/assets/24602d3d-eaeb-482d-ae6a-d1024397a0b9" />
 
 # Safe Transfer of Data
@@ -51,6 +52,7 @@ new packet is sent. The diagram also highlights a situation where the
 packet with seq_num = 4 is damaged. Upon receiving the corresponding
 NACK signal, the sender slides the window back to the packet with
 seq_num = 4.
+
 <img width="659" alt="ARQ" src="https://github.com/user-attachments/assets/4f655dc5-737c-4d2f-a2fd-1a1104bfa997" />
 
 # Damaging Mechanism
@@ -78,6 +80,7 @@ with a SYN-ACK message, and the master peer responds with an ACK to
 complete the handshake. If no connection is initiated or there is no
 response from the user to connect, the peer will automatically shut down
 after 60 seconds.
+
 <img width="481" alt="HANDSHAKE (1)" src="https://github.com/user-attachments/assets/5e9ccba3-1ae8-4f66-8a01-8d0cf2f7451c" />
 
 # Keep alive
