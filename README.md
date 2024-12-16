@@ -1,11 +1,9 @@
+# About the Project
+This is a university project that involved implementing a peer-to-peer connection between two devices within a local network. It featured the development of a custom protocol built on top of UDP, called STN. The STN protocol ensures secure data transfer, includes a keep-alive mechanism, and establishes connections — functioning somewhat like TCP, but in a simpler way :) 
+
 # Header
 
-The header length is now 7 bytes, reduced from 14 bytes in the initial
-version. This improvement was achieved by removing the acknowledgment
-number, as well as the window field, since the receiver does not utilize
-a window for receiving. Additionally, the length field was deleted as it
-was unnecessary.
-
+The header length is 7 bytes.
 The sequence number is an individual ID for the packets that are
 transmitted in one session. In this project, 4 bytes were chosen for the
 sequence number, as this provides ample space to store an integer
@@ -32,11 +30,11 @@ The Go-Back-N method with an adaptive window is employed to ensure the
 correct transfer of packets. The essence of the Go-Back-N method lies in
 the sliding window mechanism. For instance, the sender transmits 5
 packets (window_size = 5), and the receiver's acknowledgments (in
-[code]{style="color: red"} DATAACK/TXTACK) cause the sender to slide the
+code DATAACK/TXTACK) cause the sender to slide the
 window forward, allowing new packets to be sent.
 
 However, if a packet is lost or damaged, the sender receives a NACK
-signal (DATAERR/TXTERR in [code]{style="color: red"}). In this case, the
+signal (DATAERR/TXTERR in code). In this case, the
 sender must adjust the window so that the first packet in the window has
 the same sequence number as the lost or damaged packet. All
 functionality related to the Go-Back-N method is implemented in the
@@ -92,7 +90,7 @@ KEA-ACK flag. If no response is received after 3 attempts, the
 connection will be automatically closed, ensuring that inactive or lost
 connections are properly terminated.
 
-In the [code]{style="color: red"} keep alive is represented as KeepAlive
+In the code keep alive is represented as KeepAlive
 class in the P2P.py. Keep-alive mechanism uses its own thread that is
 created by keep_alive.start() and can be stopped by keep_alive.stop()
 
