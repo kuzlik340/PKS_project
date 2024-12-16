@@ -23,8 +23,7 @@ Go-Back-N method with an adaptive window.
 
 In code the encoder and decoder for the protocol header are contained in
 the protocol.py
-
-![protocol header](STN.png)
+<img width="1103" alt="STN (1)" src="https://github.com/user-attachments/assets/24602d3d-eaeb-482d-ae6a-d1024397a0b9" />
 
 # Safe Transfer of Data
 
@@ -52,8 +51,7 @@ new packet is sent. The diagram also highlights a situation where the
 packet with seq_num = 4 is damaged. Upon receiving the corresponding
 NACK signal, the sender slides the window back to the packet with
 seq_num = 4.
-
-![ARQ diagram](ARQ.png)
+<img width="659" alt="ARQ" src="https://github.com/user-attachments/assets/4f655dc5-737c-4d2f-a2fd-1a1104bfa997" />
 
 # Damaging Mechanism
 
@@ -80,8 +78,7 @@ with a SYN-ACK message, and the master peer responds with an ACK to
 complete the handshake. If no connection is initiated or there is no
 response from the user to connect, the peer will automatically shut down
 after 60 seconds.
-
-![handshake diagram](HANDSHAKE.png)
+<img width="481" alt="HANDSHAKE (1)" src="https://github.com/user-attachments/assets/5e9ccba3-1ae8-4f66-8a01-8d0cf2f7451c" />
 
 # Keep alive
 
@@ -132,33 +129,7 @@ peer that initiates the exit will send an empty packet with the EXIT
 flag set. The receiving peer must respond with an EXIT-ACK packet. Once
 the EXIT-ACK is received, both peers will shut down, ensuring a clean
 and synchronized termination of the connection.
-
-![exit diagram](EXIT.png)
-
-# Wireshark
-
-Here are the screenshots for the handshake. Based on flags we can see
-the sequence: SYN, SYN-ACK, ACK
-
-![SYN](SYN.png)
-
-![SYN-ACK](SYNACK.png)
-
-![ACK](ACK.png)
-
-Here are the screenshots for the sending file in fragments and receiving
-it. Here we can see the sequence: DATA, DATA-ACK
-
-![DATA](DATA.png)
-
-![DATAACK](DATACK.png)
-
-Here are the screenshots when the peers are disconnecting from each
-other manually. We can see: EXIT, EXIT-ACK
-
-![EXIT](EXIT_WR.png)
-
-![EXITACK](EXITACK.png)
+<img width="491" alt="EXIT (1)" src="https://github.com/user-attachments/assets/d71e8091-d32d-4edb-b8bf-57b302a99144" />
 
 # About program
 
